@@ -3,6 +3,11 @@ import { gmGet, gmSet, gmDel } from './storage.js';
 export const CLIENT_ID = '8e07d86dd04241ce98f3c959c6b0beec';
 export const SCOPES = 'user-read-currently-playing';
 export const REDIRECT_URI = 'https://genius.com/';
+
+// --- DEBUG TOGGLE ---
+const DEBUG_MODE = true;
+let lastLoggedId = '';
+
 export const K = {
 	verifier: 'sp_code_verifier',
 	state: 'sp_state',
@@ -48,6 +53,7 @@ export async function startLogin() {
 		scope: SCOPES,
 	});
 
+	// FIXED: Corrected syntax to properly append parameters
 	window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
 }
 
@@ -58,10 +64,7 @@ export async function handleRedirectIfNeeded() {
 	if (!code || !state) return false;
 
 	const savedState = await gmGet(K.state);
-	if (state !== savedState) {
-		console.error('State mismatch!');
-		return false;
-	}
+	if (state !== savedState) return false;
 
 	const codeVerifier = await gmGet(K.verifier);
 	const params = new URLSearchParams({
@@ -145,19 +148,27 @@ export async function getCurrentlyPlaying() {
 			headers: { Authorization: `Bearer ${accessToken}` },
 		});
 
-		// LOG RAW DATA HERE
-		console.log('Spotify Raw Data:', res.data);
-
-		if (res.status === 204 || !res.data || !res.data.item) return null;
+		if (res.status === 204 || !res.data || !res.data.item) {
+			lastLoggedId = '';
+			return null;
+		}
 
 		const item = res.data.item;
-		const artists = item.artists.map((a) => a.name).join(', ');
+		const currentId = item.id || item.uri;
+
+		// Only log once per unique track
+		if (DEBUG_MODE && currentId !== lastLoggedId) {
+			console.log('--- Spotify Raw Data (New Track) ---');
+			console.log(res.data);
+			lastLoggedId = currentId;
+		}
 
 		return {
 			title: item.name,
-			artist: artists,
+			artist: item.artists.map((a) => a.name).join(', '),
 			albumArtist: item.album.artists[0]?.name || '',
 			artUrl: item.album.images[0]?.url || '',
+			isLocal: item.is_local || false,
 		};
 	} catch (e) {
 		return null;

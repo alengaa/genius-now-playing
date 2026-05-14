@@ -13,7 +13,6 @@ import {
 	fetchArtistAvatarFromGeniusPageUrl,
 } from '../services/geniusApi.js';
 
-// ---------------------- State ----------------------
 const song = ref(null);
 const geniusUrl = ref(null);
 const coverUrl = ref(null);
@@ -27,18 +26,19 @@ const coverCache = new Map();
 let lastSongKey = '';
 let interval = null;
 
-// ---------------------- Helper ----------------------
+const instrumentalRegex =
+	/\((Instrumental)\)|\[(Instrumental)\]|Instrumental Remake/i;
+
 function cleanTitleForManualSearch(title) {
 	if (!title) return '';
 	return title
 		.replace(/\((feat\.|ft\.)[^\)]*\)/gi, '')
-		.replace(/\(Instrumental\)/gi, '')
+		.replace(instrumentalRegex, '')
 		.replace(/[()\[\]]/g, '')
 		.replace(/\s+/g, ' ')
 		.trim();
 }
 
-// ---------------------- Update Song ----------------------
 async function updateSong() {
 	if (!loggedIn.value || isUpdating.value) return;
 	isUpdating.value = true;
@@ -48,25 +48,29 @@ async function updateSong() {
 		if (!current) {
 			lastSongKey = '';
 			song.value = null;
+			geniusUrl.value = null;
+			coverUrl.value = null;
 			status.value = 'No song playing.';
 			isUpdating.value = false;
 			return;
 		}
 
-		// Use Album Artist for search if Instrumental is detected
-		const isInstrumental = current.title
-			.toLowerCase()
-			.includes('instrumental');
-		const searchArtist = isInstrumental
-			? current.albumArtist
-			: current.artist;
-		const songKey = `${current.title} - ${searchArtist}`;
+		const isInstrumental = instrumentalRegex.test(current.title);
+		const searchArtist =
+			isInstrumental && current.isLocal
+				? current.artist
+				: current.albumArtist || current.artist;
 
+		const songKey = `${current.title} - ${searchArtist}`;
 		status.value = '';
 		song.value = current;
 
 		if (songKey !== lastSongKey) {
 			lastSongKey = songKey;
+
+			// NEW: Reset both URL and Cover immediately on track change
+			geniusUrl.value = null;
+			coverUrl.value = '';
 
 			if (!geniusUrlCache.has(songKey)) {
 				const result = await fetchGeniusUrlAndCover(
@@ -94,25 +98,19 @@ async function updateSong() {
 			coverUrl.value = coverCache.get(songKey) || '';
 		}
 	} catch (e) {
-		console.error('Update cycle error:', e);
+		console.error(e);
 	} finally {
 		isUpdating.value = false;
 	}
 }
 
-// ---------------------- Actions ----------------------
 async function checkLoginStatus() {
-	try {
-		const profile = await getUserProfile();
-		if (profile) {
-			username.value = profile.display_name || profile.id;
-			loggedIn.value = true;
-			return true;
-		}
-	} catch (e) {
-		console.error('Auth check failed:', e);
+	const profile = await getUserProfile();
+	if (profile) {
+		username.value = profile.display_name || profile.id;
+		loggedIn.value = true;
+		return true;
 	}
-	username.value = '';
 	loggedIn.value = false;
 	return false;
 }
@@ -123,53 +121,37 @@ async function handleLogin() {
 
 async function handleLogout() {
 	if (interval) clearInterval(interval);
-	interval = null;
 	await logout();
 	loggedIn.value = false;
-	username.value = '';
 	song.value = null;
-	status.value = 'Logged out';
+	geniusUrl.value = null;
+	coverUrl.value = null;
 }
 
 function openSearch() {
-	const titleRaw = song.value?.title || '';
-	const isInstrumental = titleRaw.toLowerCase().includes('instrumental');
-	const cleanedTitle = cleanTitleForManualSearch(titleRaw);
-
-	const searchArtist = isInstrumental
-		? song.value?.albumArtist
-		: song.value?.artist;
-	const query = `${cleanedTitle} ${searchArtist || ''}`.trim();
-
+	const isInstrumental = instrumentalRegex.test(song.value?.title || '');
+	const searchArtist =
+		isInstrumental && song.value?.isLocal
+			? song.value?.artist
+			: song.value?.albumArtist || song.value?.artist;
+	const query =
+		`${cleanTitleForManualSearch(song.value?.title)} ${searchArtist}`.trim();
 	window.open(
 		`https://genius.com/search?q=${encodeURIComponent(query)}`,
 		'_blank',
-		'noopener,noreferrer',
 	);
 }
 
 function openLyrics() {
-	const isInstrumental = song.value?.title
-		.toLowerCase()
-		.includes('instrumental');
-	const searchArtist = isInstrumental
-		? song.value?.albumArtist
-		: song.value?.artist;
-	const baseQuery = `${song.value.title} ${searchArtist}`.trim();
-	const url =
-		geniusUrl.value ||
-		`https://genius.com/search?q=${encodeURIComponent(baseQuery)}`;
-	window.location.href = url;
+	if (geniusUrl.value) {
+		window.location.href = geniusUrl.value;
+	}
 }
 
-// ---------------------- Lifecycle ----------------------
 onMounted(async () => {
 	await handleRedirectIfNeeded();
-	const isAuthed = await checkLoginStatus();
-
-	if (isAuthed) {
+	if (await checkLoginStatus()) {
 		await updateSong();
-		if (interval) clearInterval(interval);
 		interval = setInterval(updateSong, 5000);
 	}
 });
@@ -186,8 +168,8 @@ onUnmounted(() => {
 				<span></span><span></span><span></span>
 			</div>
 			<img v-if="coverUrl" :src="coverUrl" alt="" />
+			<div v-else class="cover-placeholder"></div>
 		</div>
-
 		<div class="meta">
 			<div v-if="song" class="song-info">
 				<div class="title">{{ song.title }}</div>
@@ -200,13 +182,7 @@ onUnmounted(() => {
 				<span v-else>Please login to Spotify</span>
 			</div>
 		</div>
-
-		<button
-			v-if="loggedIn && song"
-			class="search-btn"
-			title="Search manually"
-			@click="openSearch"
-		>
+		<button v-if="loggedIn && song" class="search-btn" @click="openSearch">
 			<svg
 				xmlns="http://www.w3.org/2000/svg"
 				viewBox="0 0 24 24"
@@ -219,12 +195,11 @@ onUnmounted(() => {
 				/>
 			</svg>
 		</button>
-
 		<button
 			v-if="loggedIn"
 			class="yellow-btn"
 			id="gs-genius-link"
-			:disabled="!song"
+			:disabled="!song || !geniusUrl"
 			@click="openLyrics"
 		>
 			Open lyrics page
@@ -259,11 +234,15 @@ onUnmounted(() => {
 	border-top: 1px solid #222;
 	z-index: 999999;
 }
-#spotify-now-playing img {
+#spotify-now-playing img,
+.cover-placeholder {
 	height: 50px;
 	width: 50px;
 	object-fit: cover;
 	box-shadow: 0 0 5px rgba(255, 255, 255, 0.25);
+}
+.cover-placeholder {
+	background: #222;
 }
 #spotify-now-playing .meta {
 	flex: 1;
@@ -280,11 +259,6 @@ onUnmounted(() => {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-}
-#gs-error {
-	color: #ff4d4d;
-	font-size: 12px;
-	margin-top: 2px;
 }
 #spotify-now-playing button {
 	font-size: 14px;
@@ -306,31 +280,24 @@ onUnmounted(() => {
 	height: 32px;
 	aspect-ratio: 1/1;
 }
-#spotify-now-playing button.search-btn:hover {
-	background-color: #fff;
-	border-color: #fff;
-}
 #spotify-now-playing button.yellow-btn {
 	background-color: #ffff64;
 	color: #0f111a;
 	border-color: #ffff64;
-}
-#spotify-now-playing button.yellow-btn:hover {
-	background-color: #fff;
-	border-color: #fff;
-}
-#spotify-now-playing button:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
 }
 #spotify-now-playing button.green-btn {
 	background-color: #1db954;
 	color: #0f111a;
 	border-color: #1db954;
 }
-#spotify-now-playing button.green-btn:hover {
+#spotify-now-playing button:hover {
 	background-color: #fff;
 	border-color: #fff;
+}
+#spotify-now-playing button:disabled {
+	opacity: 0.3;
+	cursor: not-allowed;
+	filter: grayscale(1);
 }
 .logged-in-as {
 	font-size: 14px;
@@ -354,8 +321,7 @@ onUnmounted(() => {
 	height: 100%;
 	background: #1db954;
 	border: 0.75px solid #000;
-	border-top-left-radius: 12px;
-	border-top-right-radius: 12px;
+	border-radius: 12px 12px 0 0;
 	transform-origin: bottom;
 }
 .audio-bars span:nth-child(1) {
