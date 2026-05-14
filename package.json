@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "vite build",
-		"test": "npm run build && web-ext run --source-dir ./dist",
+		"test": "npm run build && web-ext run --source-dir ./dist --firefox=\"/mnt/c/Program Files/Mozilla Firefox/firefox.exe\" --firefox-profile=\"/home/alenga/firefox-debug-profile\"",
 		"preview": "vite preview"
 	},
 	"dependencies": {

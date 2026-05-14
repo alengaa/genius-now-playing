@@ -5,6 +5,7 @@ import {
 	startLogin,
 	logout,
 	handleRedirectIfNeeded,
+	getUserProfile,
 } from '../services/spotifyApi.js';
 import {
 	fetchGeniusUrlAndCover,
@@ -17,7 +18,9 @@ const song = ref(null);
 const geniusUrl = ref(null);
 const coverUrl = ref(null);
 const loggedIn = ref(false);
+const username = ref('');
 const status = ref('');
+const isUpdating = ref(false);
 
 const geniusUrlCache = new Map();
 const coverCache = new Map();
@@ -25,29 +28,40 @@ let lastSongKey = '';
 let interval = null;
 
 // ---------------------- Helper ----------------------
-function cleanTitleForSearch(title) {
+function cleanTitleForManualSearch(title) {
 	if (!title) return '';
 	return title
-		.replace(/\((feat\.|ft\.).*?\)/gi, '')
-		.replace(/\((.*?)\)/g, '$1')
+		.replace(/\((feat\.|ft\.)[^\)]*\)/gi, '')
+		.replace(/\(Instrumental\)/gi, '')
+		.replace(/[()\[\]]/g, '')
+		.replace(/\s+/g, ' ')
 		.trim();
 }
 
 // ---------------------- Update Song ----------------------
 async function updateSong() {
+	if (!loggedIn.value || isUpdating.value) return;
+	isUpdating.value = true;
+
 	try {
 		const current = await getCurrentlyPlaying();
-		const songKey = current ? `${current.title} - ${current.artist}` : '';
-
 		if (!current) {
 			lastSongKey = '';
-			loggedIn.value = true;
 			song.value = null;
-			status.value = 'No song playing on Spotify.';
+			status.value = 'No song playing.';
+			isUpdating.value = false;
 			return;
 		}
 
-		loggedIn.value = true;
+		// Use Album Artist for search if Instrumental is detected
+		const isInstrumental = current.title
+			.toLowerCase()
+			.includes('instrumental');
+		const searchArtist = isInstrumental
+			? current.albumArtist
+			: current.artist;
+		const songKey = `${current.title} - ${searchArtist}`;
+
 		status.value = '';
 		song.value = current;
 
@@ -55,10 +69,11 @@ async function updateSong() {
 			lastSongKey = songKey;
 
 			if (!geniusUrlCache.has(songKey)) {
-				geniusUrlCache.set(
-					songKey,
-					await fetchGeniusUrlAndCover(current.title, current.artist),
+				const result = await fetchGeniusUrlAndCover(
+					current.title,
+					searchArtist,
 				);
+				geniusUrlCache.set(songKey, result);
 			}
 			const data = geniusUrlCache.get(songKey);
 			geniusUrl.value = data?.url ?? null;
@@ -66,9 +81,8 @@ async function updateSong() {
 			if (!coverCache.has(songKey)) {
 				let url = data?.cover || current.artUrl || '';
 				if (!url) {
-					const artistPageUrl = await fetchArtistPageUrl(
-						current.artist,
-					);
+					const artistPageUrl =
+						await fetchArtistPageUrl(searchArtist);
 					if (artistPageUrl)
 						url =
 							await fetchArtistAvatarFromGeniusPageUrl(
@@ -80,37 +94,53 @@ async function updateSong() {
 			coverUrl.value = coverCache.get(songKey) || '';
 		}
 	} catch (e) {
-		console.error('Error updating song:', e);
-		loggedIn.value = false;
-		song.value = null;
-		status.value = 'Not logged in to Spotify.';
-		lastSongKey = '';
+		console.error('Update cycle error:', e);
+	} finally {
+		isUpdating.value = false;
 	}
 }
 
 // ---------------------- Actions ----------------------
+async function checkLoginStatus() {
+	try {
+		const profile = await getUserProfile();
+		if (profile) {
+			username.value = profile.display_name || profile.id;
+			loggedIn.value = true;
+			return true;
+		}
+	} catch (e) {
+		console.error('Auth check failed:', e);
+	}
+	username.value = '';
+	loggedIn.value = false;
+	return false;
+}
+
 async function handleLogin() {
 	await startLogin();
 }
 
 async function handleLogout() {
+	if (interval) clearInterval(interval);
+	interval = null;
 	await logout();
 	loggedIn.value = false;
+	username.value = '';
 	song.value = null;
 	status.value = 'Logged out';
 }
 
-function openLyrics() {
-	const baseQuery = `${song.value.title} ${song.value.artist}`.trim();
-	const url =
-		geniusUrl.value ||
-		`https://genius.com/search?q=${encodeURIComponent(baseQuery)}`;
-	window.location.href = url;
-}
-
 function openSearch() {
-	const cleanedTitle = cleanTitleForSearch(song.value?.title || '');
-	const query = `${cleanedTitle} ${song.value?.artist || ''}`.trim();
+	const titleRaw = song.value?.title || '';
+	const isInstrumental = titleRaw.toLowerCase().includes('instrumental');
+	const cleanedTitle = cleanTitleForManualSearch(titleRaw);
+
+	const searchArtist = isInstrumental
+		? song.value?.albumArtist
+		: song.value?.artist;
+	const query = `${cleanedTitle} ${searchArtist || ''}`.trim();
+
 	window.open(
 		`https://genius.com/search?q=${encodeURIComponent(query)}`,
 		'_blank',
@@ -118,14 +148,35 @@ function openSearch() {
 	);
 }
 
+function openLyrics() {
+	const isInstrumental = song.value?.title
+		.toLowerCase()
+		.includes('instrumental');
+	const searchArtist = isInstrumental
+		? song.value?.albumArtist
+		: song.value?.artist;
+	const baseQuery = `${song.value.title} ${searchArtist}`.trim();
+	const url =
+		geniusUrl.value ||
+		`https://genius.com/search?q=${encodeURIComponent(baseQuery)}`;
+	window.location.href = url;
+}
+
 // ---------------------- Lifecycle ----------------------
 onMounted(async () => {
 	await handleRedirectIfNeeded();
-	await updateSong();
-	interval = setInterval(updateSong, 1000);
+	const isAuthed = await checkLoginStatus();
+
+	if (isAuthed) {
+		await updateSong();
+		if (interval) clearInterval(interval);
+		interval = setInterval(updateSong, 5000);
+	}
 });
 
-onUnmounted(() => clearInterval(interval));
+onUnmounted(() => {
+	if (interval) clearInterval(interval);
+});
 </script>
 
 <template>
@@ -138,12 +189,20 @@ onUnmounted(() => clearInterval(interval));
 		</div>
 
 		<div class="meta">
-			<div class="title">{{ song?.title || '' }}</div>
-			<div class="artist">{{ song?.artist || '' }}</div>
+			<div v-if="song" class="song-info">
+				<div class="title">{{ song.title }}</div>
+				<div class="artist">{{ song.artist }}</div>
+			</div>
+			<div v-else class="user-status">
+				<span v-if="loggedIn" class="logged-in-as"
+					>Logged in as <strong>{{ username }}</strong></span
+				>
+				<span v-else>Please login to Spotify</span>
+			</div>
 		</div>
 
 		<button
-			v-if="loggedIn"
+			v-if="loggedIn && song"
 			class="search-btn"
 			title="Search manually"
 			@click="openSearch"
@@ -164,27 +223,26 @@ onUnmounted(() => clearInterval(interval));
 		<button
 			v-if="loggedIn"
 			class="yellow-btn"
+			id="gs-genius-link"
 			:disabled="!song"
 			@click="openLyrics"
 		>
 			Open lyrics page
 		</button>
-
 		<button v-if="!loggedIn" class="green-btn" @click="handleLogin">
 			Login
 		</button>
 		<button v-if="loggedIn" class="green-btn" @click="handleLogout">
 			Log out
 		</button>
-
-		<div class="status">{{ status }}</div>
+		<div id="gs-error" class="status">{{ status }}</div>
 	</div>
 </template>
 
 <style scoped>
 #spotify-now-playing,
 #spotify-now-playing * {
-	font-family: 'Programme', sans-serif !important;
+	font-family: 'Programme', 'Arial', sans-serif !important;
 	color: #fff;
 }
 #spotify-now-playing {
@@ -223,7 +281,7 @@ onUnmounted(() => clearInterval(interval));
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.status {
+#gs-error {
 	color: #ff4d4d;
 	font-size: 12px;
 	margin-top: 2px;
@@ -251,7 +309,6 @@ onUnmounted(() => clearInterval(interval));
 #spotify-now-playing button.search-btn:hover {
 	background-color: #fff;
 	border-color: #fff;
-	color: #0f111a;
 }
 #spotify-now-playing button.yellow-btn {
 	background-color: #ffff64;
@@ -261,7 +318,10 @@ onUnmounted(() => clearInterval(interval));
 #spotify-now-playing button.yellow-btn:hover {
 	background-color: #fff;
 	border-color: #fff;
-	color: #0f111a;
+}
+#spotify-now-playing button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 #spotify-now-playing button.green-btn {
 	background-color: #1db954;
@@ -271,7 +331,10 @@ onUnmounted(() => clearInterval(interval));
 #spotify-now-playing button.green-btn:hover {
 	background-color: #fff;
 	border-color: #fff;
-	color: #0f111a;
+}
+.logged-in-as {
+	font-size: 14px;
+	color: #1db954;
 }
 .cover-wrap {
 	display: flex;
@@ -285,68 +348,31 @@ onUnmounted(() => clearInterval(interval));
 	justify-content: space-between;
 	height: 35%;
 	width: 16px;
-	margin-right: 0.5px;
-	animation: speedCycle 6s ease-in-out infinite;
-	transform-origin: bottom center;
 }
 .audio-bars span {
-	display: block;
 	width: 4.5px;
 	height: 100%;
 	background: #1db954;
 	border: 0.75px solid #000;
 	border-top-left-radius: 12px;
 	border-top-right-radius: 12px;
-	transform-origin: bottom center;
-	will-change: transform;
-	backface-visibility: hidden;
+	transform-origin: bottom;
 }
 .audio-bars span:nth-child(1) {
-	animation: barPulse1 1.2s ease-in-out infinite;
+	animation: barPulse 1.2s infinite ease-in-out;
 }
 .audio-bars span:nth-child(2) {
-	animation: barPulse2 1.35s ease-in-out infinite;
+	animation: barPulse 1.35s infinite ease-in-out;
 }
 .audio-bars span:nth-child(3) {
-	animation: barPulse3 1.05s ease-in-out infinite;
+	animation: barPulse 1.05s infinite ease-in-out;
 }
-@keyframes barPulse1 {
+@keyframes barPulse {
 	0%,
 	100% {
 		transform: scaleY(0.3);
 	}
 	50% {
-		transform: scaleY(1);
-	}
-}
-@keyframes barPulse2 {
-	0%,
-	100% {
-		transform: scaleY(0.25);
-	}
-	50% {
-		transform: scaleY(0.9);
-	}
-}
-@keyframes barPulse3 {
-	0%,
-	100% {
-		transform: scaleY(0.35);
-	}
-	50% {
-		transform: scaleY(0.8);
-	}
-}
-@keyframes speedCycle {
-	0%,
-	30% {
-		transform: scaleY(1);
-	}
-	30%,
-	80% {
-		transform: scaleY(1.3);
-	}
-	100% {
 		transform: scaleY(1);
 	}
 }

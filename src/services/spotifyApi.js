@@ -1,6 +1,5 @@
 import { gmGet, gmSet, gmDel } from './storage.js';
 
-// Spotify API constants
 export const CLIENT_ID = '8e07d86dd04241ce98f3c959c6b0beec';
 export const SCOPES = 'user-read-currently-playing';
 export const REDIRECT_URI = 'https://genius.com/';
@@ -12,7 +11,6 @@ export const K = {
 	expiry: 'sp_token_expiry',
 };
 
-// Helper functions
 function randStr(len) {
 	const c = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 	let o = '';
@@ -30,16 +28,13 @@ function base64url(buf) {
 async function sha256(input) {
 	const encoder = new TextEncoder();
 	const data = encoder.encode(input);
-	const hash = await crypto.subtle.digest('SHA-256', data);
-	return hash;
+	return await crypto.subtle.digest('SHA-256', data);
 }
 
-// Spotify OAuth flow
 export async function startLogin() {
 	const codeVerifier = randStr(64);
 	const codeChallenge = base64url(await sha256(codeVerifier));
 	const state = randStr(16);
-
 	await gmSet(K.verifier, codeVerifier);
 	await gmSet(K.state, state);
 
@@ -56,7 +51,6 @@ export async function startLogin() {
 	window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
 }
 
-// Handle redirect after Spotify login
 export async function handleRedirectIfNeeded() {
 	const url = new URL(window.location.href);
 	const code = url.searchParams.get('code');
@@ -65,17 +59,11 @@ export async function handleRedirectIfNeeded() {
 
 	const savedState = await gmGet(K.state);
 	if (state !== savedState) {
-		alert('Spotify login failed: state mismatch.');
+		console.error('State mismatch!');
 		return false;
 	}
 
 	const codeVerifier = await gmGet(K.verifier);
-	if (!codeVerifier) {
-		alert('Spotify login failed: missing code verifier.');
-		return false;
-	}
-
-	// Exchange code for tokens
 	const params = new URLSearchParams({
 		client_id: CLIENT_ID,
 		grant_type: 'authorization_code',
@@ -84,36 +72,29 @@ export async function handleRedirectIfNeeded() {
 		code_verifier: codeVerifier,
 	});
 
-	const res = await fetch('https://accounts.spotify.com/api/token', {
+	const res = await browser.runtime.sendMessage({
+		type: 'spotifyApiFetch',
+		url: 'https://accounts.spotify.com/api/token',
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: params,
+		body: params.toString(),
 	});
 
-	if (!res.ok) {
-		alert('Spotify login failed: token exchange error.');
-		return false;
+	if (res.ok) {
+		await gmSet(K.access, res.data.access_token);
+		await gmSet(K.refresh, res.data.refresh_token);
+		await gmSet(K.expiry, Date.now() + (res.data.expires_in - 60) * 1000);
+		window.history.replaceState({}, document.title, url.pathname);
+		return true;
 	}
-
-	const data = await res.json();
-	await gmSet(K.access, data.access_token);
-	await gmSet(K.refresh, data.refresh_token);
-	await gmSet(K.expiry, Date.now() + (data.expires_in - 60) * 1000);
-
-	// Clean up URL
-	window.history.replaceState({}, document.title, url.pathname);
-
-	return true;
+	return false;
 }
 
-// Refresh access token if needed
 export async function refreshTokenIfNeeded() {
 	const expiry = await gmGet(K.expiry, 0);
-	const now = Date.now();
-	if (now < expiry) return; // Token still valid
-
+	if (Date.now() < expiry) return;
 	const refreshToken = await gmGet(K.refresh);
-	if (!refreshToken) throw new Error('No refresh token available.');
+	if (!refreshToken) return;
 
 	const params = new URLSearchParams({
 		client_id: CLIENT_ID,
@@ -121,47 +102,68 @@ export async function refreshTokenIfNeeded() {
 		refresh_token: refreshToken,
 	});
 
-	const res = await fetch('https://accounts.spotify.com/api/token', {
+	const res = await browser.runtime.sendMessage({
+		type: 'spotifyApiFetch',
+		url: 'https://accounts.spotify.com/api/token',
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-		body: params,
+		body: params.toString(),
 	});
 
-	if (!res.ok) throw new Error('Failed to refresh Spotify token.');
-
-	const data = await res.json();
-	await gmSet(K.access, data.access_token);
-	if (data.refresh_token) await gmSet(K.refresh, data.refresh_token);
-	await gmSet(K.expiry, Date.now() + (data.expires_in - 60) * 1000);
+	if (res.ok) {
+		await gmSet(K.access, res.data.access_token);
+		if (res.data.refresh_token)
+			await gmSet(K.refresh, res.data.refresh_token);
+		await gmSet(K.expiry, Date.now() + (res.data.expires_in - 60) * 1000);
+	}
 }
 
-// Get currently playing track from Spotify
-export async function getCurrentlyPlaying() {
-	await refreshTokenIfNeeded();
-	const accessToken = await gmGet(K.access);
-	if (!accessToken) throw new Error('No Spotify access token.');
-
-	const res = await fetch(
-		'https://api.spotify.com/v1/me/player/currently-playing',
-		{
+export async function getUserProfile() {
+	try {
+		await refreshTokenIfNeeded();
+		const accessToken = await gmGet(K.access);
+		if (!accessToken) return null;
+		const res = await browser.runtime.sendMessage({
+			type: 'spotifyApiFetch',
+			url: 'https://api.spotify.com/v1/me',
 			headers: { Authorization: `Bearer ${accessToken}` },
-		},
-	);
-
-	if (res.status === 204) return null; // Nothing playing
-	if (!res.ok) throw new Error('Failed to fetch currently playing track.');
-
-	const data = await res.json();
-	if (!data || !data.item) return null;
-
-	return {
-		title: data.item.name,
-		artist: data.item.artists.map((a) => a.name).join(', '),
-		artUrl: data.item.album.images[0]?.url || '',
-	};
+		});
+		return res.ok ? res.data : null;
+	} catch (e) {
+		return null;
+	}
 }
 
-// Logout and clear tokens
+export async function getCurrentlyPlaying() {
+	try {
+		await refreshTokenIfNeeded();
+		const accessToken = await gmGet(K.access);
+		if (!accessToken) return null;
+		const res = await browser.runtime.sendMessage({
+			type: 'spotifyApiFetch',
+			url: 'https://api.spotify.com/v1/me/player/currently-playing',
+			headers: { Authorization: `Bearer ${accessToken}` },
+		});
+
+		// LOG RAW DATA HERE
+		console.log('Spotify Raw Data:', res.data);
+
+		if (res.status === 204 || !res.data || !res.data.item) return null;
+
+		const item = res.data.item;
+		const artists = item.artists.map((a) => a.name).join(', ');
+
+		return {
+			title: item.name,
+			artist: artists,
+			albumArtist: item.album.artists[0]?.name || '',
+			artUrl: item.album.images[0]?.url || '',
+		};
+	} catch (e) {
+		return null;
+	}
+}
+
 export async function logout() {
 	await gmDel(K.access);
 	await gmDel(K.refresh);

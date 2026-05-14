@@ -1,24 +1,30 @@
 ==========================================================
-AUTOMATION & TESTING (WSL/VSCODE)
+GENIUS NOW PLAYING - PROJECT ARCHITECTURE & WORKFLOW
 ==========================================================
 
-1. THE ONE-CLICK COMMAND:
-   - Run: 'npm run test'
-   - This builds the project AND opens Firefox with the extension.
-   - If you close Firefox, the script stops.
+1. THE "MAGIC" COMMANDS (WSL)
+   - npm run build : Compiles src/ into a browser-ready /dist folder.
+   - npm run test  : Builds project + attempts to launch Windows Firefox.
+                     (Requires all Firefox windows to be closed first).
 
-2. MANIFEST WATCH-OUTS:
-   - 'manifest_version': 2 (Old Firefox standard, still works).
-   - 'permissions': If you add a new API, you MUST add the URL here.
-   - 'content_scripts': Points to the "bundle" created by Vite.
+2. FILE SYSTEM TRUTH
+   - Root (/)      : manifest.json (Source of truth), vite.config.js
+   - src/content/  : UI logic (Vue) and index.js (the injector).
+   - src/background: background.js (API proxy to bypass CORS).
+   - src/services/ : Core logic (Spotify API, Genius API, storage.js).
+   - public/       : Static assets (favicon.svg, icons.svg).
 
-3. WSL SPECIFIC:
-   - Ensure 'web-ext' is installed.
-   - If Firefox doesn't open, ensure your WSL PATH includes the 
-     Windows Firefox installation directory.
+3. MODERN BUILD RULES (Vite-Plugin-Web-Extension)
+   - MANIFEST: Point entries to 'src/...' paths. The plugin re-maps them to 
+     '/dist/...' during build automatically.
+   - CSS: Vue bundles scoped styles directly into the JS bundle.
+   - REFRESH: Saving a file in VS Code triggers a re-build. 
 
-4. RE-BUILDING:
-   - Every time you change 'NowPlaying.vue', you must restart 
-     the 'npm run test' command to see changes.
+4. DEBUGGING & LOGS
+   - CONTENT SCRIPT (UI): Right-click Genius.com -> Inspect -> Console.
+   - BACKGROUND SCRIPT: Open about:debugging -> This Firefox -> Inspect.
 
+5. WSL FIXES
+   - WSL PATH: //wsl$/[Distro]/home/[user]/project-folder/dist
+   - FIREFOX PATH: "/mnt/c/Program Files/Mozilla Firefox/firefox.exe"
 ==========================================================

@@ -3,14 +3,12 @@ export const GENIUS_API_KEY =
 const geniusCache = new Map();
 
 /**
- * Helper: Remove (feat. Artist), (ft. Artist), (Remaster), (Remastered), etc.
+ * Helper: Only remove technical metadata tags, preserve stylistic ones
  */
 function cleanSongTitle(title) {
 	return title
-		.replace(/\((feat\.|ft\.)[^\)]*\)/gi, '')
-		.replace(/\(([^)]*remaster(ed)?[^)]*)\)/gi, '')
-		.replace(/-\s*\d{0,4}\s*remaster(ed)?/gi, '')
-		.replace(/\s*\bremaster(ed)?\b\s*$/gi, '')
+		.replace(/\((feat\.|ft\.)[^\)]*\)/gi, '') // Remove (feat. Artist)
+		.replace(/\(Instrumental\)/gi, '') // Remove (Instrumental)
 		.trim();
 }
 
@@ -30,6 +28,7 @@ function parseArtists(artistStr) {
 
 // ------------------ Main function ------------------
 export async function fetchGeniusUrlAndCover(title, artist) {
+	const isInstrumental = title.toLowerCase().includes('instrumental');
 	const cleanTitle = cleanSongTitle(title);
 	const cacheKey = `${cleanTitle} ${artist}`.trim();
 
@@ -42,11 +41,14 @@ export async function fetchGeniusUrlAndCover(title, artist) {
 		.replace(/[^a-zA-Z0-9\s]/g, '')
 		.trim();
 
-	const query = `${cleanTitle} ${firstArtist}`.trim();
+	// API Query: Literal title. If instrumental, exclude artist to find lyrics
+	const query = isInstrumental
+		? cleanTitle.trim()
+		: `${cleanTitle} ${firstArtist}`.trim();
+
 	const apiUrl = `https://api.genius.com/search?q=${encodeURIComponent(query)}`;
 
-	console.log(`${firstArtist} - ${cleanTitle}`);
-	console.log('Query sent to Genius API:', apiUrl);
+	console.log(`API Query: ${query}`);
 
 	const res = await browser.runtime.sendMessage({
 		type: 'geniusApiFetch',
@@ -54,20 +56,14 @@ export async function fetchGeniusUrlAndCover(title, artist) {
 		headers: { Authorization: `Bearer ${GENIUS_API_KEY}` },
 	});
 
-	if (!res.ok) {
-		console.log('Request failed:', res.status);
-		return { url: null, cover: null };
-	}
+	if (!res.ok) return { url: null, cover: null };
 
 	let data;
 	try {
 		data = JSON.parse(res.text);
 	} catch (e) {
-		console.log('Failed to parse Genius API response:', e);
 		return { url: null, cover: null };
 	}
-
-	console.log('Genius API Hits:', data.response?.hits || []);
 
 	const songHits = (data.response?.hits || []).filter(
 		(hit) => hit.type === 'song',
@@ -105,27 +101,17 @@ export async function fetchGeniusUrlAndCover(title, artist) {
 	return { url: pageUrl, cover: coverUrl };
 }
 
-// ------------------ Extra exports for compatibility ------------------
-
-/**
- * Fetch the artist's Genius page URL by name.
- */
 export async function fetchArtistPageUrl(artistName) {
 	const apiUrl = `https://api.genius.com/search?q=${encodeURIComponent(artistName)}`;
 	const res = await fetch(apiUrl, {
 		headers: { Authorization: `Bearer ${GENIUS_API_KEY}` },
 	});
-
 	if (!res.ok) return null;
-
 	const data = await res.json();
 	const firstHit = data.response?.hits?.[0];
 	return firstHit?.result?.primary_artist?.url || null;
 }
 
-/**
- * Fetch the artist's avatar (image) from a Genius artist page URL.
- */
 export async function fetchArtistAvatarFromGeniusPageUrl(url) {
 	try {
 		const res = await fetch(url);
@@ -133,14 +119,10 @@ export async function fetchArtistAvatarFromGeniusPageUrl(url) {
 		const match = html.match(/<meta property="og:image" content="([^"]+)"/);
 		return match ? match[1] : null;
 	} catch (e) {
-		console.error('Error fetching artist avatar:', e);
 		return null;
 	}
 }
 
-/**
- * Simple debug logger used across scripts.
- */
 export function debugLog(...args) {
 	console.log('[GeniusAPI]', ...args);
 }
