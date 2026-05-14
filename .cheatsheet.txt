@@ -1,0 +1,24 @@
+==========================================================
+AUTOMATION & TESTING (WSL/VSCODE)
+==========================================================
+
+1. THE ONE-CLICK COMMAND:
+   - Run: 'npm run test'
+   - This builds the project AND opens Firefox with the extension.
+   - If you close Firefox, the script stops.
+
+2. MANIFEST WATCH-OUTS:
+   - 'manifest_version': 2 (Old Firefox standard, still works).
+   - 'permissions': If you add a new API, you MUST add the URL here.
+   - 'content_scripts': Points to the "bundle" created by Vite.
+
+3. WSL SPECIFIC:
+   - Ensure 'web-ext' is installed.
+   - If Firefox doesn't open, ensure your WSL PATH includes the 
+     Windows Firefox installation directory.
+
+4. RE-BUILDING:
+   - Every time you change 'NowPlaying.vue', you must restart 
+     the 'npm run test' command to see changes.
+
+==========================================================
