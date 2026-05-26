@@ -1,21 +1,20 @@
 {
-	"name": "genius-now-playing",
-	"private": true,
-	"version": "0.0.0",
-	"type": "module",
-	"scripts": {
-		"dev": "vite",
-		"build": "vite build",
-		"test": "npm run build && web-ext run --source-dir ./dist --firefox=\"/mnt/c/Program Files/Mozilla Firefox/firefox.exe\" --firefox-profile=\"/home/alenga/firefox-debug-profile\"",
-		"preview": "vite preview"
-	},
-	"dependencies": {
-		"vue": "^3.5.34"
-	},
-	"devDependencies": {
-		"@vitejs/plugin-vue": "^6.0.6",
-		"vite": "^8.0.12",
-		"vite-plugin-web-extension": "^4.5.1",
-		"web-ext": "^10.1.0"
-	}
+    "name": "genius-now-playing",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "web-ext run --source-dir ./ --keep-profile-changes",
+        "build": "vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "vue": "^3.5.34"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^6.0.6",
+        "vite": "^8.0.12",
+        "vite-plugin-web-extension": "^4.5.1",
+        "web-ext": "^10.1.0"
+    }
 }
